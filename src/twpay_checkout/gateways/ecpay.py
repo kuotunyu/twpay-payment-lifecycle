@@ -6,6 +6,7 @@
 - 產生訂單：https://developers.ecpay.com.tw/?p=2862
 """
 import hashlib
+import hmac
 import json
 import re
 import time
@@ -125,7 +126,7 @@ def verify_check_mac_value(
     if not received:
         return False
     expected = generate_check_mac_value(payload, hash_key, hash_iv)
-    return received.upper() == expected
+    return hmac.compare_digest(received.upper(), expected)
 
 
 def _sanitize_text(name: str, limit: int) -> str:

@@ -4,6 +4,7 @@
 單元測試 fixture 即手冊 §4.1 官方範例值；詳 docs/gateway-notes.md）。
 """
 import hashlib
+import hmac
 import re
 import time
 from collections.abc import Mapping
@@ -87,7 +88,8 @@ def verify_trade_sha(
 ) -> bool:
     if not trade_sha:
         return False
-    return make_trade_sha(cipher_hex, hash_key, hash_iv) == trade_sha.upper()
+    expected = make_trade_sha(cipher_hex, hash_key, hash_iv)
+    return hmac.compare_digest(expected, trade_sha.upper())
 
 
 def _sanitize_item_desc(name: str) -> str:
