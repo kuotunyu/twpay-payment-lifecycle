@@ -24,6 +24,7 @@ from .base import (
     PaymentRedirect,
     RecurringPlan,
     SignatureError,
+    require_gateway_credentials,
 )
 
 # 紅線：只允許測試環境端點（ccore），正式環境（core）一律禁止。
@@ -124,11 +125,15 @@ class NewebpayGateway:
         self.merchant_id = settings.newebpay_merchant_id
         self.hash_key = settings.newebpay_hash_key
         self.hash_iv = settings.newebpay_hash_iv
+        require_gateway_credentials(
+            gateway_label="NewebPay",
+            merchant_id=self.merchant_id,
+            hash_key=self.hash_key,
+            hash_iv=self.hash_iv,
+            hash_key_length=32,
+            hash_iv_length=16,
+        )
         self.mpg_url = _assert_stage(STAGE_MPG_URL)
-        if not (self.merchant_id and self.hash_key and self.hash_iv):
-            raise ValueError(
-                "藍新測試商店金鑰未設定：請至 cwww.newebpay.com 申請並填入 .env"
-            )
 
     def create_payment(
         self,

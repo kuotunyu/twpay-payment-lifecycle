@@ -27,6 +27,7 @@ from .base import (
     PaymentRedirect,
     RecurringPlan,
     SignatureError,
+    require_gateway_credentials,
 )
 
 # 紅線：只允許測試環境端點，正式環境一律禁止。
@@ -169,6 +170,14 @@ class EcpayGateway:
         self.merchant_id = settings.ecpay_merchant_id
         self.hash_key = settings.ecpay_hash_key
         self.hash_iv = settings.ecpay_hash_iv
+        require_gateway_credentials(
+            gateway_label="ECPay",
+            merchant_id=self.merchant_id,
+            hash_key=self.hash_key,
+            hash_iv=self.hash_iv,
+            hash_key_length=16,
+            hash_iv_length=16,
+        )
         self.checkout_url = _assert_stage(STAGE_CHECKOUT_URL)
         self.query_url = _assert_stage(STAGE_QUERY_URL)
         self.period_query_url = _assert_stage(STAGE_PERIOD_QUERY_URL)

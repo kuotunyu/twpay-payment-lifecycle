@@ -9,6 +9,39 @@ from fastapi import Response
 from ..models import GatewayName, NotificationKind, Order
 
 
+def require_gateway_credentials(
+    *,
+    gateway_label: str,
+    merchant_id: str,
+    hash_key: str,
+    hash_iv: str,
+    hash_key_length: int,
+    hash_iv_length: int,
+) -> None:
+    """Fail closed when sandbox credentials are missing or malformed."""
+    fields = {
+        "MerchantID": merchant_id,
+        "HashKey": hash_key,
+        "HashIV": hash_iv,
+    }
+    missing = [name for name, value in fields.items() if not value.strip()]
+    if missing:
+        raise ValueError(
+            f"{gateway_label} sandbox credentials 未設定：{', '.join(missing)}"
+        )
+    if (
+        not hash_key.isascii()
+        or not hash_iv.isascii()
+        or len(hash_key) != hash_key_length
+        or len(hash_iv) != hash_iv_length
+    ):
+        raise ValueError(
+            f"{gateway_label} sandbox credentials 格式錯誤："
+            f"HashKey 必須為 {hash_key_length} 個 ASCII 字元，"
+            f"HashIV 必須為 {hash_iv_length} 個 ASCII 字元"
+        )
+
+
 class SignatureError(Exception):
     """Notification failed signature verification; carries the raw payload
     so the caller can still record it for auditing (紅線：驗簽失敗要留原始 payload)."""
