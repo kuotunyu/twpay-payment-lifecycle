@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}導向付款頁{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <p class="eyebrow">Signed redirect</p>
+  <h1>正在導向 {{ gateway_label }}…</h1>
+  <p class="muted">付款資料已在伺服器端完成簽章，即將以 Form POST 前往官方測試付款頁。</p>
+</div>
+<div class="card">
+  <p class="muted">訂單 <code>{{ order.order_no }}</code> · NT$ {{ order.amount }} ·
+     若未自動跳轉，請按下方按鈕。</p>
+  <form id="gateway-form" method="post" action="{{ redirect.action_url }}" accept-charset="utf-8">
+    {% for name, value in redirect.fields.items() %}
+    <input type="hidden" name="{{ name }}" value="{{ value }}">
+    {% endfor %}
+    <button type="submit">前往付款</button>
+  </form>
+  <details style="margin-top:1.2rem">
+    <summary class="muted">簽章後的表單欄位（demo 檢視用）</summary>
+    <div class="table-shell" style="margin-top:.8rem;box-shadow:none"><table>
+      {% for name, value in redirect.fields.items() %}
+      <tr><th>{{ name }}</th><td><code style="word-break:break-all">{{ value }}</code></td></tr>
+      {% endfor %}
+    </table></div>
+  </details>
+</div>
+<script>document.getElementById("gateway-form").submit();</script>
+{% endblock %}

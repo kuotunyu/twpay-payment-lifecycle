@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}訂單 {{ order.order_no }}{% endblock %}
+{% block content %}
+<div class="order-header">
+  <div>
+    <p class="eyebrow">Payment state</p>
+    <h1>訂單狀態</h1>
+    <span class="order-number">{{ order.order_no }}</span>
+  </div>
+  <span id="status-badge" class="badge {{ status.value }}">{{ status.value }}</span>
+</div>
+
+<div class="status-rail" aria-label="付款狀態流程">
+  <div class="status-step {{ 'active' if status.value == 'pending' else 'done' }}">
+    <span>01</span><strong>訂單建立</strong>
+  </div>
+  <div class="status-step {{ 'active' if status.value == 'awaiting_payment' else ('done' if status.value == 'paid' and order.payment_method.value == 'atm' else '') }}">
+    <span>02</span><strong>{{ "等待轉帳" if order.payment_method.value == "atm" else "等待通知" }}</strong>
+  </div>
+  <div class="status-step {{ 'active' if status.value == 'paid' else '' }}">
+    <span>03</span><strong>驗簽入帳</strong>
+  </div>
+</div>
+
+<div class="card">
+  <dl class="kv">
+    <dt>商品</dt><dd>{{ product.name }}</dd>
+    <dt>金額</dt><dd class="price">NT$ {{ order.amount }}</dd>
+    <dt>金流商 / 付款方式</dt>
+    <dd>{{ "綠界 ECPay" if order.gateway.value == "ecpay" else "藍新 NewebPay" }} /
+        {{ "信用卡" if order.payment_method.value == "credit_card" else "ATM 虛擬帳號" }}</dd>
+    <dt>收款模式</dt><dd>{{ "定期定額" if subscription else "單次付款" }}</dd>
+    <dt>金流商交易編號</dt><dd>{{ order.gateway_trade_no or "—" }}</dd>
+    <dt>建立時間</dt><dd>{{ order.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</dd>
+    <dt>付款完成時間</dt>
+    <dd id="paid-at">{{ order.paid_at.strftime("%Y-%m-%d %H:%M:%S") if order.paid_at else "—" }}</dd>
+  </dl>
+
+  {% if order.virtual_account %}
+  <div class="atm-box">
+    <strong>ATM 繳費資訊</strong>
+    <dl class="kv" style="margin:.4rem 0 0">
+      <dt>銀行代碼</dt><dd>{{ order.bank_code }}</dd>
+      <dt>虛擬帳號</dt><dd><code>{{ order.virtual_account }}</code></dd>
+      <dt>繳費期限</dt>
+      <dd>{{ order.pay_deadline.strftime("%Y-%m-%d %H:%M:%S") if order.pay_deadline else "—" }}</dd>
+    </dl>
+  </div>
+  {% endif %}
+</div>
+
+{% if subscription %}
+<div class="card">
+  <p class="eyebrow">Recurring lifecycle</p>
+  <h2 style="margin-top:0">定期定額計畫</h2>
+  <dl class="kv">
+    <dt>週期</dt><dd>每 {{ subscription.frequency }} {{ {"D":"日","M":"月","Y":"年"}.get(subscription.period_type, subscription.period_type) }}，共 {{ subscription.exec_times }} 期</dd>
+    <dt>授權進度</dt><dd><strong>{{ subscription.success_times }} / {{ subscription.exec_times }}</strong></dd>
+    <dt>累計成功金額</dt><dd>NT$ {{ subscription.success_amount }}</dd>
+    <dt>計畫狀態</dt><dd><span class="badge {{ subscription.status.value }}">{{ subscription.status.value }}</span></dd>
+  </dl>
+  {% if charges %}
+  <div class="table-shell" style="box-shadow:none;margin-top:1rem">
+    <table><tr><th>期次</th><th>交易編號</th><th>金額</th><th>結果</th><th>時間</th></tr>
+    {% for charge in charges %}
+    <tr><td>{{ charge.sequence }}</td><td>{{ charge.gateway_trade_no }}</td><td>NT$ {{ charge.amount }}</td>
+      <td class="{{ 'ok' if charge.success else 'ng' }}">{{ "success" if charge.success else "failed" }}</td>
+      <td class="muted">{{ charge.charged_at.strftime("%m-%d %H:%M:%S") }}</td></tr>
+    {% endfor %}</table>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+  <p class="eyebrow">Callback audit</p>
+  <h2 style="margin-top:0">本筆訂單的通知紀錄</h2>
+  {% if notifications %}
+  <div class="table-shell" style="box-shadow:none">
+  <table>
+    <tr><th>時間</th><th>類型</th><th>驗簽</th><th>金額比對</th><th>處理結果</th></tr>
+    {% for n in notifications %}
+    <tr>
+      <td class="muted">{{ n.received_at.strftime("%m-%d %H:%M:%S") }}</td>
+      <td>{{ n.kind.value }}</td>
+      <td>{% if n.signature_valid %}<span class="ok">通過</span>{% else %}<span class="ng">失敗</span>{% endif %}</td>
+      <td>{% if n.amount_matched is none %}—{% elif n.amount_matched %}<span class="ok">相符</span>{% else %}<span class="ng">不符</span>{% endif %}</td>
+      <td>{{ n.processed_result.value }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">尚未收到任何通知。</p>
+  {% endif %}
+</div>
+
+{% if query_logs or refunds %}
+<div class="card">
+  <p class="eyebrow">Operations audit</p>
+  <h2 style="margin-top:0">收款後作業</h2>
+  {% if query_logs %}
+  <p><strong>最近查單：</strong> {{ query_logs[0].outcome.value }} · {{ query_logs[0].queried_at.strftime("%Y-%m-%d %H:%M:%S") }}</p>
+  {% endif %}
+  {% if refunds %}
+  <p><strong>最近退款演練：</strong> {{ refunds[0].status.value }} · NT$ {{ refunds[0].amount }} <code>{{ refunds[0].mode }}</code></p>
+  {% endif %}
+</div>
+{% endif %}
+
+<p style="display:flex;gap:.7rem;flex-wrap:wrap">
+  <a class="btn" href="/">← 回商品頁</a>
+  <a class="btn" href="/admin/operations">前往付款營運台 →</a>
+</p>
+
+{% if status.value in ("pending", "awaiting_payment") %}
+<script>
+  // 訂單狀態只信「驗簽通過的背景通知」；前端輪詢僅為了讓狀態變化即時可見。
+  const current = "{{ status.value }}";
+  const timer = setInterval(async () => {
+    try {
+      const res = await fetch("/api/orders/{{ order.order_no }}/status");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.status !== current) { clearInterval(timer); location.reload(); }
+    } catch (e) { /* 網路瞬斷時下一輪再試 */ }
+  }, 2000);
+</script>
+{% endif %}
+{% endblock %}

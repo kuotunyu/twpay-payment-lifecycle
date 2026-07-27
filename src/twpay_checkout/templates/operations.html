@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}付款營運台{% endblock %}
+{% block content %}
+<section class="ops-hero">
+  <div>
+    <p class="eyebrow">Payment operations / ECPay sandbox</p>
+    <h1>付款營運台</h1>
+    <p class="hero-copy">
+      從收款後的查單補償、週期扣款、退款政策到每日對帳，把「付款成功」之後真正會遇到的營運問題留在同一條稽核鏈。
+    </p>
+  </div>
+  <div class="ops-metrics">
+    <div><strong>{{ metrics.orders }}</strong><span>近期 ECPay 訂單</span></div>
+    <div><strong>{{ metrics.subscriptions }}</strong><span>定期定額計畫</span></div>
+    <div><strong>{{ metrics.refundable }}</strong><span>可演練退款</span></div>
+    <div><strong>{{ metrics.differences }}</strong><span>累計對帳差異</span></div>
+  </div>
+</section>
+
+<div class="truth-strip" role="note">
+  <span><i class="truth-live"></i><strong>LIVE STAGE</strong> 建單、通知、主動查單</span>
+  <span><i class="truth-sim"></i><strong>SIMULATED</strong> 退款（官方無測試端點）</span>
+  <span><i class="truth-import"></i><strong>IMPORT</strong> 對帳 CSV（stage 下載需 IP 白名單）</span>
+</div>
+
+<section id="queries" class="ops-section">
+  <div class="section-heading">
+    <div><p class="eyebrow">01 / Recovery</p><h2>主動查單與漏單補償</h2></div>
+    <p>回應驗簽、訂單編號與金額全部相符，才允許補成 paid。</p>
+  </div>
+  <div class="table-shell">
+    <table>
+      <tr><th>訂單</th><th>方式</th><th>本地狀態</th><th>建立時間</th><th>操作</th></tr>
+      {% for order in orders %}
+      <tr>
+        <td><a href="/orders/{{ order.order_no }}">{{ order.order_no }}</a><br><span class="muted">NT$ {{ order.amount }}</span></td>
+        <td>{{ order.payment_method.value }}</td>
+        <td><span class="badge {{ order.status.value }}">{{ order.status.value }}</span></td>
+        <td class="muted">{{ order.created_at.strftime("%m-%d %H:%M") }}</td>
+        <td>
+          <form method="post" action="/admin/orders/{{ order.order_no }}/query">
+            <button class="btn-small" type="submit">向 stage 查單</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">先從商品頁建立一筆 ECPay 訂單。</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% if query_logs %}
+  <details class="audit-fold">
+    <summary>最近 {{ query_logs|length }} 筆查單稽核</summary>
+    <div class="table-shell">
+      <table>
+        <tr><th>時間</th><th>訂單</th><th>遠端狀態</th><th>驗簽</th><th>編號</th><th>金額</th><th>結果</th></tr>
+        {% for row in query_logs %}
+        <tr>
+          <td class="muted">{{ row.queried_at.strftime("%m-%d %H:%M:%S") }}</td>
+          <td>{{ row.order_no }}</td><td>{{ row.remote_status or "—" }}</td>
+          <td class="{{ 'ok' if row.signature_valid else 'ng' }}">{{ "通過" if row.signature_valid else "失敗" }}</td>
+          <td class="{{ 'ok' if row.order_matched else 'ng' }}">{{ "相符" if row.order_matched else "不符" }}</td>
+          <td class="{{ 'ok' if row.amount_matched else 'ng' }}">{{ "相符" if row.amount_matched else "不符" }}</td>
+          <td><strong>{{ row.outcome.value }}</strong></td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+  </details>
+  {% endif %}
+</section>
+
+<section id="subscriptions" class="ops-section">
+  <div class="section-heading">
+    <div><p class="eyebrow">02 / Recurring</p><h2>定期定額生命週期</h2></div>
+    <p>初次授權走 ReturnURL；第二期起走 PeriodReturnURL，逐期冪等記帳。</p>
+  </div>
+  <div class="table-shell">
+    <table>
+      <tr><th>原始訂單</th><th>週期</th><th>進度</th><th>成功金額</th><th>狀態</th><th>最後訊息</th><th>操作</th></tr>
+      {% for sub in subscriptions %}
+      {% set order = order_by_id.get(sub.order_id) %}
+      <tr>
+        <td>{% if order %}<a href="/orders/{{ order.order_no }}">{{ order.order_no }}</a>{% else %}#{{ sub.order_id }}{% endif %}</td>
+        <td>每 {{ sub.frequency }} {{ {"D":"日","M":"月","Y":"年"}.get(sub.period_type, sub.period_type) }}</td>
+        <td><strong>{{ sub.success_times }} / {{ sub.exec_times }}</strong></td>
+        <td>NT$ {{ sub.success_amount }}</td>
+        <td><span class="badge {{ sub.status.value }}">{{ sub.status.value }}</span></td>
+        <td class="muted">{{ sub.last_message or "等待初次授權" }}</td>
+        <td>
+          <form method="post" action="/admin/subscriptions/{{ sub.id }}/query" style="margin-bottom:.4rem">
+            <button class="btn-small" type="submit">同步期次</button>
+          </form>
+          {% if sub.status.value in ("active", "past_due") %}
+          <form method="post" action="/admin/subscriptions/{{ sub.id }}/cancel">
+            <button class="btn-small" type="submit">終止後續扣款</button>
+          </form>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="muted">在商品頁選擇「每月一次，共 3 期」即可建立計畫。</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% if charges %}
+  <details class="audit-fold">
+    <summary>逐期扣款明細</summary>
+    <div class="table-shell">
+      <table>
+        <tr><th>期次</th><th>綠界交易編號</th><th>金額</th><th>結果</th><th>時間</th></tr>
+        {% for charge in charges %}
+        <tr><td>{{ charge.sequence }}</td><td>{{ charge.gateway_trade_no }}</td><td>NT$ {{ charge.amount }}</td>
+          <td class="{{ 'ok' if charge.success else 'ng' }}">{{ "success" if charge.success else "failed" }}</td>
+          <td class="muted">{{ charge.charged_at.strftime("%m-%d %H:%M:%S") }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </details>
+  {% endif %}
+  {% if action_logs %}
+  <details class="audit-fold">
+    <summary>定期定額作業稽核</summary>
+    <div class="table-shell">
+      <table><tr><th>時間</th><th>計畫</th><th>動作</th><th>驗簽</th><th>結果</th><th>金流訊息</th></tr>
+      {% for log in action_logs %}
+      <tr><td class="muted">{{ log.created_at.strftime("%m-%d %H:%M:%S") }}</td><td>#{{ log.subscription_id }}</td>
+        <td>{{ log.action.value }}</td><td class="{{ 'ok' if log.signature_valid else 'ng' }}">{{ "通過" if log.signature_valid else "—" }}</td>
+        <td><strong>{{ log.status.value }}</strong></td><td class="muted">{{ log.gateway_message }}</td></tr>
+      {% endfor %}</table>
+    </div>
+  </details>
+  {% endif %}
+  {% if subscription_query_logs %}
+  <details class="audit-fold">
+    <summary>定期明細查詢稽核</summary>
+    <div class="table-shell">
+      <table><tr><th>時間</th><th>計畫</th><th>編號</th><th>金額</th><th>週期</th><th>補回明細</th><th>結果</th></tr>
+      {% for log in subscription_query_logs %}
+      <tr><td class="muted">{{ log.created_at.strftime("%m-%d %H:%M:%S") }}</td><td>#{{ log.subscription_id }}</td>
+        <td class="{{ 'ok' if log.order_matched else 'ng' }}">{{ "相符" if log.order_matched else "不符" }}</td>
+        <td class="{{ 'ok' if log.amount_matched else 'ng' }}">{{ "相符" if log.amount_matched else "不符" }}</td>
+        <td class="{{ 'ok' if log.schedule_matched else 'ng' }}">{{ "相符" if log.schedule_matched else "不符" }}</td>
+        <td>{{ log.recovered_charges }}</td><td><strong>{{ log.outcome.value }}</strong></td></tr>
+      {% endfor %}</table>
+    </div>
+  </details>
+  {% endif %}
+</section>
+
+<section id="refunds" class="ops-section">
+  <div class="section-heading">
+    <div><p class="eyebrow">03 / Refund policy</p><h2>退款／放棄演練</h2></div>
+    <p>政策與稽核是真實程式；結果明確標示 simulation，絕不呼叫 production。</p>
+  </div>
+  <div class="notice-warning">
+    <strong>為什麼是 simulation？</strong>
+    ECPay 官方說明信用卡請退款 API 無法在測試環境使用。本區展示的是金額上限、訂單狀態、適用付款方式與 idempotency 檢查。
+  </div>
+  <div class="refund-grid">
+    {% for order in orders if order.status.value == "paid" and order.payment_method.value == "credit_card" %}
+    <form class="card ops-form" method="post" action="/admin/orders/{{ order.order_no }}/refund">
+      <p class="eyebrow">Sandbox simulation</p>
+      <h3>{{ order.order_no }}</h3>
+      <p class="price">可檢核上限 NT$ {{ order.amount }}</p>
+      <input type="hidden" name="idempotency_key" value="{{ refund_tokens[order.order_no] }}">
+      <label>動作
+        <select name="action"><option value="refund">退刷 R</option><option value="void">放棄授權 N</option></select>
+      </label>
+      <label>金額<input name="amount" type="number" min="1" max="{{ order.amount }}" value="{{ order.amount }}" required></label>
+      <label>原因<input name="reason" type="text" maxlength="200" value="客戶取消訂單"></label>
+      <button type="submit">執行政策檢核</button>
+    </form>
+    {% else %}
+    <div class="card"><p class="muted">完成一筆 ECPay 信用卡 sandbox 付款後，可在此演練退款。</p></div>
+    {% endfor %}
+  </div>
+  {% if refunds %}
+  <div class="table-shell">
+    <table>
+      <tr><th>時間</th><th>訂單</th><th>動作</th><th>金額</th><th>模式</th><th>結果</th><th>說明</th></tr>
+      {% for refund in refunds %}
+      {% set order = order_by_id.get(refund.order_id) %}
+      <tr><td class="muted">{{ refund.created_at.strftime("%m-%d %H:%M:%S") }}</td>
+        <td>{{ order.order_no if order else refund.order_id }}</td><td>{{ refund.action.value }}</td><td>NT$ {{ refund.amount }}</td>
+        <td><code>{{ refund.mode }}</code></td><td><strong>{{ refund.status.value }}</strong></td><td class="muted">{{ refund.gateway_message }}</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+</section>
+
+<section id="reconciliation" class="ops-section">
+  <div class="section-heading">
+    <div><p class="eyebrow">04 / Reconciliation</p><h2>每日對帳差異報表</h2></div>
+    <p>匯入不修改訂單，只產生 matched／缺單／金額／狀態差異。</p>
+  </div>
+  <form class="card reconcile-form" method="post" action="/admin/reconciliation" enctype="multipart/form-data">
+    <label>起日<input type="date" name="period_start" value="{{ today }}" required></label>
+    <label>迄日<input type="date" name="period_end" value="{{ today }}" required></label>
+    <label class="file-field">ECPay CSV V3（UTF-8）<input type="file" name="report" accept=".csv,text/csv" required></label>
+    <button type="submit">比對並留下稽核</button>
+  </form>
+  {% for run in runs %}
+  <details class="reconcile-run" {{ "open" if loop.first else "" }}>
+    <summary>
+      <span>#{{ run.id }} · {{ run.period_start }} → {{ run.period_end }} · {{ run.source_name }}</span>
+      <strong>{{ run.matched_rows }} matched / {{ run.difference_rows }} differences</strong>
+    </summary>
+    {% if run.error_message %}<p class="ng">{{ run.error_message }}</p>{% endif %}
+    <div class="table-shell">
+      <table>
+        <tr><th>訂單</th><th>本地</th><th>金流</th><th>本地狀態</th><th>金流狀態</th><th>結果</th></tr>
+        {% for item in run_items.get(run.id, []) %}
+        <tr><td>{{ item.order_no }}</td><td>{{ "NT$ " ~ item.local_amount if item.local_amount is not none else "—" }}</td>
+          <td>{{ "NT$ " ~ item.gateway_amount if item.gateway_amount is not none else "—" }}</td>
+          <td>{{ item.local_status or "—" }}</td><td>{{ item.gateway_status or "—" }}</td>
+          <td class="{{ 'ok' if item.result.value == 'matched' else 'ng' }}"><strong>{{ item.result.value }}</strong></td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </details>
+  {% else %}
+  <p class="muted">尚未匯入對帳檔。stage 下載 request builder 已實作；實際下載需先在 ECPay 後台設定 IP 白名單。</p>
+  {% endfor %}
+</section>
+{% endblock %}

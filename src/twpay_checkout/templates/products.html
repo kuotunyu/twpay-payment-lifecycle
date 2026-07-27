@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">ECPay payment lifecycle lab</p>
+    <h1>不只收款成功，<br>也把後續營運做完。</h1>
+    <p class="hero-copy">
+      從一次付清、ATM、定期定額與背景通知，到主動查單補償、退款政策與每日對帳。
+      可用的流程接官方 ECPay sandbox；官方無測試端點的部分會明確標示 simulation。
+    </p>
+  </div>
+  <div class="proof-grid" aria-label="專案重點">
+    <div><strong>03</strong><span>信用卡／ATM／定期定額</span></div>
+    <div><strong>04</strong><span>收款後營運能力</span></div>
+    <div><strong>100%</strong><span>背景通知先驗簽</span></div>
+    <div><strong>AUDIT</strong><span>每一步可追溯</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">Checkout scenarios</p>
+      <h2>建立測試訂單</h2>
+    </div>
+    <p>所有交易皆使用官方 sandbox，不會產生真實扣款。</p>
+  </div>
+<div class="product-grid">
+  {% for product in products %}
+  <article class="card product-card">
+    <div class="product-index">ITEM / 0{{ loop.index }}</div>
+    <div class="product-name">{{ product.name }}</div>
+    <div class="muted">{{ product.description }}</div>
+    <div class="price">NT$ {{ product.price }}</div>
+    <form class="buy" method="post" action="/orders">
+      <input type="hidden" name="product_id" value="{{ product.id }}">
+      <input type="hidden" name="gateway" value="ecpay">
+      <div class="field-grid">
+      <label><span>付款方式</span>
+        <select name="method" data-method>
+          <option value="credit_card">信用卡（即時入帳）</option>
+          <option value="atm">ATM 虛擬帳號（取號後入帳）</option>
+        </select>
+      </label>
+      <label><span>收款模式</span>
+        <select name="plan" data-plan>
+          <option value="one_time">單次付款</option>
+          <option value="monthly_3">每月一次，共 3 期</option>
+        </select>
+      </label>
+      </div>
+      <button type="submit"><span>開始結帳</span><span aria-hidden="true">→</span></button>
+    </form>
+  </article>
+  {% endfor %}
+</div>
+</section>
+
+{% if recent_orders %}
+<section style="margin-top:3.4rem">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">Live ledger</p>
+      <h2>最近訂單</h2>
+    </div>
+    <p>狀態只由驗簽通過的背景通知更新。</p>
+  </div>
+  <div class="table-shell">
+  <table>
+    <tr><th>訂單編號</th><th>金額</th><th>金流／方式</th><th>狀態</th><th>建立時間</th></tr>
+    {% for order in recent_orders %}
+    <tr>
+      <td><a href="/orders/{{ order.order_no }}">{{ order.order_no }}</a></td>
+      <td>NT$ {{ order.amount }}</td>
+      <td>{{ order.gateway.value }} / {{ order.payment_method.value }}</td>
+      <td><span class="badge {{ statuses[order.order_no].value }}">{{ statuses[order.order_no].value }}</span></td>
+      <td class="muted">{{ order.created_at.strftime("%m-%d %H:%M:%S") }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</section>
+{% endif %}
+<script>
+  document.querySelectorAll("form.buy").forEach((form) => {
+    const method = form.querySelector("[data-method]");
+    const plan = form.querySelector("[data-plan]");
+    plan.addEventListener("change", () => {
+      if (plan.value === "monthly_3") method.value = "credit_card";
+    });
+    method.addEventListener("change", () => {
+      if (method.value === "atm") plan.value = "one_time";
+    });
+  });
+</script>
+{% endblock %}

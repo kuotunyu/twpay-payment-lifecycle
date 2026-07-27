@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}通知稽核{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <p class="eyebrow">Callback observability</p>
+  <h1>通知稽核</h1>
+  <p class="muted">每一筆進站通知都留下原始紀錄——包含驗簽失敗、金額異常與重複通知，讓安全判斷可追溯。</p>
+</div>
+<div class="table-shell">
+  {% if notifications %}
+  <table>
+    <tr><th>#</th><th>時間</th><th>金流商</th><th>訂單</th><th>交易編號</th><th>類型</th>
+        <th>驗簽</th><th>金額</th><th>處理結果</th><th>原始 payload</th></tr>
+    {% for n in notifications %}
+    <tr>
+      <td>{{ n.id }}</td>
+      <td class="muted">{{ n.received_at.strftime("%m-%d %H:%M:%S") }}</td>
+      <td>{{ n.gateway.value }}</td>
+      <td>{% if n.order_no %}<a href="/orders/{{ n.order_no }}">{{ n.order_no }}</a>{% else %}—{% endif %}</td>
+      <td>{{ n.gateway_trade_no or "—" }}</td>
+      <td>{{ n.kind.value }}</td>
+      <td>{% if n.signature_valid %}<span class="ok">通過</span>{% else %}<span class="ng">失敗</span>{% endif %}</td>
+      <td>{% if n.amount_matched is none %}—{% elif n.amount_matched %}<span class="ok">相符</span>{% else %}<span class="ng">不符</span>{% endif %}</td>
+      <td><strong>{{ n.processed_result.value }}</strong></td>
+      <td><details><summary class="muted">展開</summary>
+          <code style="word-break:break-all">{{ n.raw_payload }}</code></details></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted" style="padding:1.2rem">尚無通知紀錄。</p>
+  {% endif %}
+</div>
+{% endblock %}
