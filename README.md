@@ -12,7 +12,7 @@
 
 ---
 
-## 系統亮點
+## 系統核心機制
 
 1. **信用卡與虛擬帳號 (ATM) 完整生命週期**：
    支援 ECPay AIO V5 hosted checkout、`ReturnURL` 驗簽入帳與 `PaymentInfoURL` ATM 虛擬帳號取號通知。
