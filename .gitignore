@@ -17,8 +17,11 @@ build/
 # Vendor manuals (official PDFs kept for local reference only)
 docs/vendor/
 
-# OS / editor
+# OS / editor / private notes
 .DS_Store
 Thumbs.db
 .claude/
 CLAUDE.md
+interview*.md
+INTERVIEW_PREP.md
+*.private.md
