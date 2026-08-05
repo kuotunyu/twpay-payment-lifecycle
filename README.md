@@ -28,20 +28,21 @@
 ## 核心資料流與安全機制
 
 ```mermaid
+%%{init: {'themeVariables': {'fontSize': '22px', 'actorFontSize': '20px', 'messageFontSize': '18px', 'noteFontSize': '18px'}}}%%
 sequenceDiagram
     autonumber
     actor User as 使用者
     participant App as FastAPI / DB
     participant ECPay as ECPay Stage
     participant Ops as 付款營運台
-    User->>App: 建立單次或定期訂單
-    App->>ECPay: CheckMacValue 簽章表單
-    ECPay-->>App: ReturnURL / PaymentInfoURL / PeriodReturnURL
-    Note over App: 檢查 CheckMacValue<br/>核對 DB 金額並進行冪等狀態轉移
-    App-->>ECPay: 回應 1|OK
-    Ops->>ECPay: QueryTradeInfo / PeriodInfo / Cancel
-    ECPay-->>Ops: 簽章回應
-    Ops->>App: 三重比對後補償並記錄 Audit Trail
+    User->>App: 1. 建立單次或定期訂單
+    App->>ECPay: 2. CheckMacValue 簽章表單
+    ECPay-->>App: 3. ReturnURL / PaymentInfoURL / PeriodReturnURL
+    Note over App,ECPay: 檢查 CheckMacValue 簽章<br/>以 DB 金額為唯一真相，進行冪等狀態轉移
+    App-->>ECPay: 4. 回應 1|OK
+    Ops->>ECPay: 5. QueryTradeInfo / PeriodInfo / Cancel
+    ECPay-->>Ops: 6. 簽章回應
+    Ops->>App: 7. 三重比對後補償並記錄 Audit Trail
 ```
 
 ---
