@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from twpay_checkout.config import Settings
+from twpay_checkout.db import init_db
 from twpay_checkout.main import create_app
 
 ECPAY_MERCHANT_ID = "3002607"
@@ -22,7 +23,7 @@ BASE_URL = "https://demo.example.test"
 
 @pytest.fixture()
 def app():
-    return create_app(
+    app_instance = create_app(
         Settings(
             database_url="sqlite:///:memory:",
             base_url=BASE_URL,
@@ -35,6 +36,8 @@ def app():
             _env_file=None,
         )
     )
+    init_db(app_instance.state.engine)
+    return app_instance
 
 
 @pytest.fixture()

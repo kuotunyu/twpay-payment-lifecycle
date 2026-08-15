@@ -23,6 +23,10 @@ from ..models import (
     SubscriptionCharge,
     SubscriptionStatus,
 )
+from .transitions import (
+    apply_order_transition,
+    apply_subscription_recurring_transition,
+)
 
 _SUFFIX_ALPHABET = string.ascii_uppercase + string.digits
 
@@ -186,6 +190,9 @@ def process_notification(
         )
     ).first()
     if already_applied is not None:
+        if already_applied.order_no and parsed.order_no != already_applied.order_no:
+            record(ProcessedResult.UNKNOWN_ORDER)
+            return gateway.failure_response("OrderMismatchForTradeNo")
         record(ProcessedResult.DUPLICATE)
         return gateway.success_response()
 
@@ -234,6 +241,9 @@ def process_notification(
         session.rollback()
         record(ProcessedResult.DUPLICATE, matched=True)
         return gateway.success_response()
+    except Exception:
+        session.rollback()
+        raise
     return gateway.success_response()
 
 
@@ -286,6 +296,9 @@ def process_recurring_notification(
         )
     ).first()
     if already_applied is not None:
+        if already_applied.order_no and parsed.order_no != already_applied.order_no:
+            record(ProcessedResult.UNKNOWN_ORDER)
+            return gateway.failure_response("OrderMismatchForTradeNo")
         record(ProcessedResult.DUPLICATE)
         return gateway.success_response()
 
@@ -329,21 +342,19 @@ def process_recurring_notification(
         raw_payload=raw,
         charged_at=parsed.paid_at or datetime.now(),
     )
-    if parsed.success:
-        subscription.success_times = max(subscription.success_times, total_times)
-        subscription.success_amount = max(subscription.success_amount, total_amount)
-        subscription.status = (
-            SubscriptionStatus.COMPLETED
-            if subscription.success_times >= subscription.exec_times
-            else SubscriptionStatus.ACTIVE
-        )
-    else:
-        subscription.failure_times += 1
-        subscription.status = SubscriptionStatus.PAST_DUE
-    subscription.last_trade_no = trade_no
-    subscription.last_message = parsed.message
-    subscription.last_charged_at = parsed.paid_at or datetime.now()
-    subscription.updated_at = datetime.now()
+    applied = apply_subscription_recurring_transition(
+        subscription,
+        success=parsed.success,
+        total_times=total_times,
+        total_amount=total_amount,
+        gateway_trade_no=trade_no,
+        message=parsed.message,
+        charged_at=parsed.paid_at or datetime.now(),
+    )
+    if not applied:
+        # 已終止或已完成計畫不可被晚到通知變更狀態；記錄忽略轉移並回成功
+        record(ProcessedResult.IGNORED_TRANSITION, matched=True)
+        return gateway.success_response()
 
     try:
         session.add(subscription)
@@ -353,38 +364,22 @@ def process_recurring_notification(
     except IntegrityError:
         session.rollback()
         record(ProcessedResult.DUPLICATE, matched=True)
+    except Exception:
+        session.rollback()
+        raise
     return gateway.success_response()
 
 
 def _apply_transition(order: Order, parsed, kind: NotificationKind) -> bool:
     """套用狀態機允許的轉移；回傳是否有套用。"""
-    if kind == NotificationKind.ATM_ACCOUNT_ISSUED:
-        if parsed.success and parsed.atm and order.status == OrderStatus.PENDING:
-            order.status = OrderStatus.AWAITING_PAYMENT
-            order.gateway_trade_no = parsed.gateway_trade_no
-            order.bank_code = parsed.atm.bank_code
-            order.virtual_account = parsed.atm.virtual_account
-            order.pay_deadline = parsed.atm.pay_deadline
-            return True
-        return False
-
-    if parsed.success and order.status in (
-        OrderStatus.PENDING,
-        OrderStatus.AWAITING_PAYMENT,
-        OrderStatus.EXPIRED,  # 逾期後才銷帳的真實付款：以銀行實收為準照樣入帳
-    ):
-        order.gateway_trade_no = parsed.gateway_trade_no
-        order.status = OrderStatus.PAID
-        order.paid_at = parsed.paid_at or datetime.now()
-        return True
-    if not parsed.success and order.status in (
-        OrderStatus.PENDING,
-        OrderStatus.AWAITING_PAYMENT,
-    ):
-        order.gateway_trade_no = parsed.gateway_trade_no
-        order.status = OrderStatus.FAILED
-        return True
-    return False
+    return apply_order_transition(
+        order,
+        success=parsed.success,
+        gateway_trade_no=parsed.gateway_trade_no,
+        kind=kind,
+        paid_at=parsed.paid_at,
+        atm_info=parsed.atm,
+    )
 
 
 def effective_status(order: Order) -> OrderStatus:

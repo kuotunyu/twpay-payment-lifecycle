@@ -37,6 +37,7 @@ from ..models import (
     SubscriptionQueryOutcome,
     SubscriptionStatus,
 )
+from .transitions import can_transition_order, can_transition_subscription
 
 FormTransport = Callable[[str, Mapping[str, str]], str]
 
@@ -94,15 +95,27 @@ def query_and_recover_order(
     elif result.trade_status == "1":
         if order.status == OrderStatus.PAID:
             outcome = QueryOutcome.CONFIRMED_PAID
-        elif order.status in (
-            OrderStatus.PENDING,
-            OrderStatus.AWAITING_PAYMENT,
-            OrderStatus.EXPIRED,
-        ):
+        elif can_transition_order(order.status, OrderStatus.PAID):
             order.status = OrderStatus.PAID
             order.gateway_trade_no = result.gateway_trade_no
             order.paid_at = result.payment_date or datetime.now()
             session.add(order)
+            # 若為掛載定期定額之首期訂單，同步啟動 Subscription 計畫
+            if order.id is not None:
+                subscription = session.exec(
+                    select(Subscription).where(Subscription.order_id == order.id)
+                ).first()
+                if subscription is not None and subscription.status == SubscriptionStatus.PENDING:
+                    subscription.status = SubscriptionStatus.ACTIVE
+                    subscription.success_times = max(subscription.success_times, 1)
+                    subscription.success_amount = max(
+                        subscription.success_amount, order.amount
+                    )
+                    subscription.last_trade_no = result.gateway_trade_no
+                    subscription.last_message = "Recovered by QueryTradeInfo"
+                    subscription.last_charged_at = result.payment_date or datetime.now()
+                    subscription.updated_at = datetime.now()
+                    session.add(subscription)
             outcome = QueryOutcome.RECOVERED
         else:
             outcome = QueryOutcome.GATEWAY_ERROR
@@ -122,9 +135,13 @@ def query_and_recover_order(
         outcome=outcome,
         raw_payload=body,
     )
-    session.add(log)
-    session.commit()
-    session.refresh(log)
+    try:
+        session.add(log)
+        session.commit()
+        session.refresh(log)
+    except Exception:
+        session.rollback()
+        raise
     return log
 
 
@@ -347,6 +364,24 @@ def simulate_refund(
         select(RefundRequest).where(RefundRequest.idempotency_key == key)
     ).first()
     if existing is not None:
+        if (
+            existing.order_id != (order.id or 0)
+            or existing.amount != amount
+            or existing.action != action
+        ):
+            conflict_row = RefundRequest(
+                order_id=order.id or 0,
+                idempotency_key=f"{key}-conflict-{secrets.token_hex(4)}",
+                action=action,
+                amount=amount,
+                reason=reason.strip()[:200],
+                status=RefundStatus.REJECTED,
+                gateway_message=f"Idempotency conflict: key '{key}' already used with different parameters",
+            )
+            session.add(conflict_row)
+            session.commit()
+            session.refresh(conflict_row)
+            return conflict_row
         return existing
 
     previous = (
@@ -557,7 +592,7 @@ def reconcile_csv(
         session.commit()
         session.refresh(run)
         return run
-    except (UnicodeError, ValueError, csv.Error) as exc:
+    except Exception as exc:
         session.rollback()
         failed = ReconciliationRun(
             period_start=period_start,

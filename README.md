@@ -71,6 +71,57 @@ sequenceDiagram
 
 ---
 
+## Correctness Guarantees & Failure Safety
+
+系統在 Application 與 Database 兩層落實關鍵防禦矩陣：
+
+| Risk / Failure Scenario | Protection Layer | Enforcement Mechanism |
+|---|---|---|
+| **Duplicate Webhook / Replay** | Application + DB | 部分唯一索引 (`uq_applied_notification`) + Payload `order_no` 一致性校驗 |
+| **Amount Tampering** | Application + DB | 以 DB 訂單金額為唯一真相 + DB `CheckConstraint('amount > 0')` |
+| **Partial DB Write / Crash** | DB Transaction Boundary | 單一資料庫交易原子提交業務狀態、稽核列與附隨紀錄，中途異常保證 Rollback |
+| **Illegal State Transition** | State Machine Policy | 集中式狀態矩陣 (`transitions.py`)，終態 (`PAID`/`FAILED`/`CANCELED`/`COMPLETED`) 阻斷倒退 |
+| **Missed Payment Webhook** | Proactive Recovery | `QueryTradeInfo/V5` 查單驗簽與金額三重比對，原子同步 Order 與 Subscription |
+| **Idempotency Key Conflict** | Policy Engine | 相同 Key 傳入衝突參數時拒絕 (`RefundStatus.REJECTED`)，阻斷誤用與覆蓋 |
+| **Reconciliation Duplication** | DB Constraint | 對帳明細複合唯一約束 (`uq_reconciliation_item_run_order`) 防範重複比對列 |
+
+---
+
+## 狀態機與交易流程 (Lifecycle & Transaction Flow)
+
+### 訂單生命週期狀態機 (Order State Diagram)
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: 建立訂單
+    PENDING --> AWAITING_PAYMENT: ATM 取號成功 (RtnCode=2)
+    PENDING --> PAID: 付款成功 (RtnCode=1 / 查單補償)
+    PENDING --> FAILED: 付款失敗
+    AWAITING_PAYMENT --> PAID: 繳費入帳成功 (含逾期實收)
+    AWAITING_PAYMENT --> FAILED: 繳費失敗
+    PAID --> [*]: 終態 (不可逆轉回 PENDING/FAILED)
+    FAILED --> [*]: 終態 (不可逆轉回 PENDING/PAID)
+```
+
+### 背景通知事務與回滾邊界 (Callback Transaction Flow)
+
+```mermaid
+flowchart TD
+    A[收到 Gateway Webhook] --> B[驗證 CheckMacValue / TradeSha]
+    B -- 驗簽失敗 --> C[寫入 REJECTED_SIGNATURE 稽核<br/>回應失敗以利重送]
+    B -- 驗簽成功 --> D{比對 Partial Unique Index<br/>gateway, trade_no, kind}
+    D -- 已存在 applied 且 Order 一致 --> E[寫入 DUPLICATE 稽核<br/>回應 1|OK 停止重送]
+    D -- 首次進站 --> F{比對 DB 金額與狀態轉移矩陣}
+    F -- 金額不符 / 非法轉移 --> G[寫入 REJECTED / IGNORED 稽核]
+    F -- 驗證通過 --> H[開啟 DB Transaction]
+    H --> I[更新 Order / Subscription<br/>寫入 APPLIED 稽核與 Charge]
+    I --> J{Commit 成功?}
+    J -- 是 --> K[回應 1|OK / HTTP 200]
+    J -- 否 (衝突/例外) --> L[Rollback Transaction<br/>兩邊不留半完成狀態]
+```
+
+---
+
 ## 快速開始
 
 需求：Python 3.11+、`uv`。
@@ -80,11 +131,11 @@ sequenceDiagram
 uv sync --locked
 copy .env.example .env
 
-# 2. 執行 56 項測試單元
+# 2. 執行全量 103 項測試（包含狀態機、故障注入、冪等與 DB 邊界測試）
 uv run python -m pytest -q
 
 # 3. 啟動服務 (開啟 http://127.0.0.1:8000/)
 uv run python -m uvicorn twpay_checkout.main:app
 ```
 
-系統測試覆蓋 56 項單元測試，包含 ECPay 官方 CheckMacValue 範例、.NET URL Encode 特殊字元、偽造簽章防禦、ATM 取號/逾期、定期定額扣款與查單補償邏輯。
+系統測試覆蓋 103 項單元與整合測試，包含 ECPay 官方 CheckMacValue 範例、.NET URL Encode 特殊字元、偽造簽章防禦、ATM 取號/逾期、定期定額扣款、查單補償、狀態機表格驅動測試、交易回滾故障注入測試以及 DB Invariant 防禦測試。

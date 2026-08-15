@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from enum import Enum
 
-from sqlalchemy import Column, Index, text
+from sqlalchemy import CheckConstraint, Column, Index, UniqueConstraint, text
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, SQLModel
 
@@ -116,6 +116,11 @@ def _enum_col(enum_cls: type[Enum], **kwargs) -> Column:
 
 
 class Product(SQLModel, table=True):
+    __tablename__ = "product"
+    __table_args__ = (
+        CheckConstraint("price > 0", name="ck_product_price_positive"),
+    )
+
     id: int | None = Field(default=None, primary_key=True)
     name: str
     price: int  # 新台幣整數元，金額不使用浮點數
@@ -124,6 +129,9 @@ class Product(SQLModel, table=True):
 
 class Order(SQLModel, table=True):
     __tablename__ = "orders"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_orders_amount_positive"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     order_no: str = Field(unique=True, index=True)  # 兩家金流的交易編號都用它
@@ -182,6 +190,16 @@ class Subscription(SQLModel, table=True):
     """Recurring plan attached to the initial ECPay order."""
 
     __tablename__ = "subscription"
+    __table_args__ = (
+        CheckConstraint("frequency >= 1", name="ck_subscription_frequency_positive"),
+        CheckConstraint("exec_times >= 1", name="ck_subscription_exec_times_positive"),
+        CheckConstraint(
+            "success_times >= 0", name="ck_subscription_success_times_non_negative"
+        ),
+        CheckConstraint(
+            "failure_times >= 0", name="ck_subscription_failure_times_non_negative"
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     order_id: int = Field(foreign_key="orders.id", unique=True, index=True)
@@ -206,6 +224,12 @@ class SubscriptionCharge(SQLModel, table=True):
     """One immutable recurring authorization attempt."""
 
     __tablename__ = "subscription_charge"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_subscription_charge_amount_positive"),
+        CheckConstraint(
+            "sequence >= 1", name="ck_subscription_charge_sequence_positive"
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     subscription_id: int = Field(foreign_key="subscription.id", index=True)
@@ -287,6 +311,9 @@ class RefundRequest(SQLModel, table=True):
     """
 
     __tablename__ = "refund_request"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_refund_amount_positive"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     order_id: int = Field(foreign_key="orders.id", index=True)
@@ -320,6 +347,9 @@ class ReconciliationRun(SQLModel, table=True):
 
 class ReconciliationItem(SQLModel, table=True):
     __tablename__ = "reconciliation_item"
+    __table_args__ = (
+        UniqueConstraint("run_id", "order_no", name="uq_reconciliation_item_run_order"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     run_id: int = Field(foreign_key="reconciliation_run.id", index=True)
