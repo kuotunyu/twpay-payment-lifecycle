@@ -10,6 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
 from ..gateways.base import PaymentRedirect
@@ -349,6 +350,44 @@ def _parse_ecpay_datetime(value: str) -> datetime | None:
         return None
 
 
+def _acquire_refund_transaction(session: Session) -> None:
+    """接管呼叫端的交易並取得資料庫層級的寫鎖，失敗則不留任何副作用。
+
+    交易歸屬：simulate_refund 自己擁有這段交易——它開始、它結束。SQLite 沒有列鎖，
+    光靠程式內的 mutex 擋不住另一個行程，唯一索引也只能擋同鍵重複、擋不住不同鍵的
+    超額退款；因此在讀取之前就以 BEGIN IMMEDIATE 取得 RESERVED 寫鎖，把同一顆資料庫
+    檔上的其他寫入者（跨 Session、跨行程）擋在區段之外，直到本次提交或回滾。
+
+    接管的前提是呼叫端沒有任何在途工作，分兩種情形擋下：
+
+    * 尚未 flush 的待處理物件（session.new／dirty／deleted）——本函式的查詢會觸發
+      autoflush，把對方的工作捲進這段交易，隨著提交一起生效、或隨著回滾一起消失。
+    * 已 flush 但未提交的寫入——驅動層已在交易中，無法再升級成 IMMEDIATE。
+
+    兩種都在動到任何狀態之前就丟出 RuntimeError：呼叫端的工作原封不動地留在原處，
+    由他們自己決定提交或回滾。本函式不會代為處置。拒絕即代表沒有接管，呼叫端的交易
+    也就不該被本函式回滾。
+    """
+    if session.new or session.dirty or session.deleted:
+        raise RuntimeError(
+            "simulate_refund requires a session with no unflushed pending work; "
+            "commit or roll back the caller's pending objects first"
+        )
+    connection = session.connection()
+    if connection.dialect.name != "sqlite":
+        # 本專案只支援 SQLite；換後端時這裡要改用該後端的序列化手段（例如列鎖）。
+        return
+    try:
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+    except OperationalError as exc:
+        if "within a transaction" not in str(exc):
+            raise
+        raise RuntimeError(
+            "simulate_refund requires a session with no open write transaction; "
+            "commit or roll back the caller's pending work first"
+        ) from exc
+
+
 def simulate_refund(
     session: Session,
     order: Order,
@@ -360,6 +399,29 @@ def simulate_refund(
 ) -> RefundRequest:
     """Run the refund policy engine without calling a production-only API."""
     key = idempotency_key or secrets.token_urlsafe(18)
+    _acquire_refund_transaction(session)
+    # 接管之後，區段內的任何例外都要回滾本函式自己開的交易——查詢失敗、autoflush
+    # 失敗、提交失敗都算——否則寫鎖會一路留到呼叫端關閉 Session。回滾只發生在接管
+    # 成功之後；入口被拒絕時沒有接管，呼叫端的交易也就不該被這裡動到。
+    try:
+        return _refund_within_transaction(
+            session, order, amount=amount, action=action, reason=reason, key=key
+        )
+    except Exception:
+        session.rollback()
+        raise
+
+
+def _refund_within_transaction(
+    session: Session,
+    order: Order,
+    *,
+    amount: int,
+    action: RefundAction,
+    reason: str,
+    key: str,
+) -> RefundRequest:
+    """退款政策本體；只在 _acquire_refund_transaction 接管成功後呼叫。"""
     existing = session.exec(
         select(RefundRequest).where(RefundRequest.idempotency_key == key)
     ).first()
@@ -382,6 +444,9 @@ def simulate_refund(
             session.commit()
             session.refresh(conflict_row)
             return conflict_row
+        # 純重放沒有自己的寫入，但仍要結束本函式開啟的寫交易、釋放寫鎖，
+        # 否則鎖會一路留到呼叫端關閉 Session，後續呼叫也無法再開交易。
+        session.commit()
         return existing
 
     previous = (
